@@ -40,14 +40,14 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['id', 'name', 'avatar', 'cumulativeValue', 'unconfirmedValue', 'level', 'balance']) &&
-             data.id is string &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.avatar is string && data.avatar.size() < 200 &&
-             data.cumulativeValue is number && data.cumulativeValue >= 0 &&
-             data.unconfirmedValue is number && data.unconfirmedValue >= 0 &&
-             data.level is number && data.level >= 1 &&
-             data.balance is number && data.balance >= 0;
+      return request.resource.data.keys().hasOnly(['id', 'name', 'avatar', 'cumulativeValue', 'unconfirmedValue', 'level', 'balance']) &&
+             (!('id' in data) || data.id is string) &&
+             (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() < 100)) &&
+             (!('avatar' in data) || (data.avatar is string && data.avatar.size() < 200)) &&
+             (!('cumulativeValue' in data) || (data.cumulativeValue is number && data.cumulativeValue >= 0)) &&
+             (!('unconfirmedValue' in data) || (data.unconfirmedValue is number && data.unconfirmedValue >= 0)) &&
+             (!('level' in data) || (data.level is number && data.level >= 1)) &&
+             (!('balance' in data) || (data.balance is number && data.balance >= 0));
     }
 
     function isValidTransaction(data) {
