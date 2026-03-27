@@ -5,32 +5,34 @@
       "description": "시스템 사용자 정보 및 토큰 잔액",
       "type": "object",
       "properties": {
-        "uid": { "type": "string" },
-        "email": { "type": "string", "format": "email" },
-        "displayName": { "type": "string" },
-        "photoURL": { "type": "string" },
-        "balance": { "type": "number", "description": "현재 보유 토큰 잔액" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "avatar": { "type": "string" },
+        "cumulativeValue": { "type": "number" },
+        "unconfirmedValue": { "type": "number" },
+        "level": { "type": "number" },
+        "balance": { "type": "number" }
       },
-      "required": ["uid", "email", "balance"]
+      "required": ["id", "name", "avatar", "cumulativeValue", "unconfirmedValue", "level", "balance"]
     },
     "Transaction": {
       "title": "Transaction",
       "description": "토큰 거래 내역",
       "type": "object",
       "properties": {
-        "fromUid": { "type": "string", "description": "보낸 사람 UID (시스템 지급일 경우 'system')" },
-        "toUid": { "type": "string", "description": "받는 사람 UID" },
+        "id": { "type": "string" },
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
         "amount": { "type": "number" },
-        "type": { "type": "string", "enum": ["transfer", "reward", "purchase"] },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "note": { "type": "string" }
+        "note": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "confirmed": { "type": "boolean" }
       },
-      "required": ["fromUid", "toUid", "amount", "type", "timestamp"]
+      "required": ["id", "fromId", "toId", "amount", "note", "timestamp", "confirmed"]
     }
   },
   "firestore": {
-    "users/{uid}": {
+    "users/{userId}": {
       "schema": "User",
       "description": "사용자 프로필 및 잔액 정보"
     },

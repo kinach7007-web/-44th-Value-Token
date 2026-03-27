@@ -1,0 +1,81 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - id: string
+    //   - name: string
+    //   - avatar: string
+    //   - cumulativeValue: number
+    //   - unconfirmedValue: number
+    //   - level: number
+    //   - balance: number
+    //
+    // Collection: transactions
+    // Document ID: {transactionId}
+    // Fields:
+    //   - id: string
+    //   - fromId: string
+    //   - toId: string
+    //   - amount: number
+    //   - note: string
+    //   - timestamp: number
+    //   - confirmed: boolean
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'avatar', 'cumulativeValue', 'unconfirmedValue', 'level', 'balance']) &&
+             data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.avatar is string && data.avatar.size() < 200 &&
+             data.cumulativeValue is number && data.cumulativeValue >= 0 &&
+             data.unconfirmedValue is number && data.unconfirmedValue >= 0 &&
+             data.level is number && data.level >= 1 &&
+             data.balance is number && data.balance >= 0;
+    }
+
+    function isValidTransaction(data) {
+      return hasOnlyAllowedFields(['id', 'fromId', 'toId', 'fromName', 'toName', 'amount', 'note', 'timestamp', 'confirmed', 'type']) &&
+             data.id is string &&
+             data.fromId is string &&
+             data.toId is string &&
+             data.fromName is string &&
+             data.toName is string &&
+             data.amount is number && data.amount > 0 &&
+             data.note is string && data.note.size() < 1000 &&
+             data.timestamp is number &&
+             data.type is string &&
+             data.confirmed is bool;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && isValidUser(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow update: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}

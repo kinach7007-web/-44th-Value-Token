@@ -42,6 +42,9 @@ import {
 } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
+import { collection, doc, onSnapshot, setDoc, writeBatch, query, orderBy } from 'firebase/firestore';
+import { db, auth } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -57,32 +60,9 @@ const getUserLevel = (cumulativeValue: number) => {
 
 export default function App() {
   // State
-  const [users, setUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('vts_users_v4');
-    if (!saved) return INITIAL_USERS;
-    
-    try {
-      const parsed = JSON.parse(saved) as User[];
-      // Migrate old data if missing new fields
-      return parsed.map(user => ({
-        ...user,
-        cumulativeValue: user.cumulativeValue ?? 0,
-        unconfirmedValue: user.unconfirmedValue ?? 0,
-        level: user.level ?? 1,
-        balance: user.balance ?? 0
-      }));
-    } catch (e) {
-      console.error('Failed to parse users from localStorage', e);
-      return INITIAL_USERS;
-    }
-  });
-  
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('vts_transactions_v4');
-    if (saved) return JSON.parse(saved);
-    
-    return [];
-  });
+  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const activeUser = currentUserId ? users.find(u => u.id === currentUserId) || users[0] : users[0];
@@ -112,43 +92,49 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // Persistence & Cross-tab Sync
+  // Firebase Sync
   useEffect(() => {
-    localStorage.setItem('vts_users_v4', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('vts_transactions_v4', JSON.stringify(transactions));
-  }, [transactions]);
-
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'vts_users_v4' && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue) as User[];
-          setUsers(parsed.map(user => ({
-            ...user,
-            cumulativeValue: user.cumulativeValue ?? 0,
-            unconfirmedValue: user.unconfirmedValue ?? 0,
-            level: user.level ?? 1,
-            balance: user.balance ?? 0
-          })));
-        } catch (err) {
-          console.error('Failed to parse users from storage event', err);
-        }
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsAuthReady(true);
       }
-      if (e.key === 'vts_transactions_v4' && e.newValue) {
-        try {
-          setTransactions(JSON.parse(e.newValue));
-        } catch (err) {
-          console.error('Failed to parse transactions from storage event', err);
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    });
+    return () => unsubscribeAuth();
   }, []);
+
+  useEffect(() => {
+    if (!isAuthReady) return;
+
+    const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
+      if (snapshot.empty) {
+        // Initialize users if empty
+        const batch = writeBatch(db);
+        INITIAL_USERS.forEach(user => {
+          const userRef = doc(db, 'users', user.id);
+          batch.set(userRef, user);
+        });
+        batch.commit().catch(console.error);
+      } else {
+        const fetchedUsers = snapshot.docs.map(doc => doc.data() as User);
+        setUsers(fetchedUsers);
+      }
+    }, (error) => {
+      console.error("Error fetching users:", error);
+    });
+
+    const q = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'));
+    const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
+      const fetchedTransactions = snapshot.docs.map(doc => doc.data() as Transaction);
+      setTransactions(fetchedTransactions);
+    }, (error) => {
+      console.error("Error fetching transactions:", error);
+    });
+
+    return () => {
+      unsubscribeUsers();
+      unsubscribeTransactions();
+    };
+  }, [isAuthReady]);
 
   // Check for unconfirmed transactions for current user
   useEffect(() => {
@@ -309,15 +295,19 @@ export default function App() {
       confirmed: false
     };
 
-    // Update users
-    const updatedUsers = users.map(u => {
-      if (u.id === activeUser.id) return { ...u, balance: u.balance - amount };
-      if (u.id === targetUser.id) return { ...u, unconfirmedValue: u.unconfirmedValue + amount };
-      return u;
-    });
-
-    setUsers(updatedUsers);
-    setTransactions([newTransaction, ...transactions]);
+    // Update Firestore
+    const batch = writeBatch(db);
+    
+    const txRef = doc(db, 'transactions', newTransaction.id);
+    batch.set(txRef, newTransaction);
+    
+    const fromUserRef = doc(db, 'users', activeUser.id);
+    batch.update(fromUserRef, { balance: activeUser.balance - amount });
+    
+    const toUserRef = doc(db, 'users', targetUser.id);
+    batch.update(toUserRef, { unconfirmedValue: targetUser.unconfirmedValue + amount });
+    
+    batch.commit().catch(console.error);
     
     // Reset form
     setIsSendModalOpen(false);
@@ -337,31 +327,23 @@ export default function App() {
     const tx = transactions.find(t => t.id === txId);
     if (!tx) return;
 
-    const updatedTransactions = transactions.map(t => 
-      t.id === txId ? { ...t, confirmed: true } : t
-    );
+    const batch = writeBatch(db);
+    
+    const txRef = doc(db, 'transactions', txId);
+    batch.update(txRef, { confirmed: true });
 
-    let levelUpOccurred = false;
+    const newCumulative = activeUser.cumulativeValue + tx.amount;
+    const newLevel = calculateLevel(newCumulative);
+    const levelUpOccurred = newLevel > activeUser.level;
 
-    const updatedUsers = users.map(u => {
-      if (u.id === activeUser.id) {
-        const newCumulative = u.cumulativeValue + tx.amount;
-        const newLevel = calculateLevel(newCumulative);
-        if (newLevel > u.level) {
-          levelUpOccurred = true;
-        }
-        return { 
-          ...u, 
-          cumulativeValue: newCumulative, 
-          unconfirmedValue: Math.max(0, u.unconfirmedValue - tx.amount),
-          level: newLevel
-        };
-      }
-      return u;
+    const userRef = doc(db, 'users', activeUser.id);
+    batch.update(userRef, {
+      cumulativeValue: newCumulative,
+      unconfirmedValue: Math.max(0, activeUser.unconfirmedValue - tx.amount),
+      level: newLevel
     });
 
-    setTransactions(updatedTransactions);
-    setUsers(updatedUsers);
+    batch.commit().catch(console.error);
     
     if (levelUpOccurred) {
       setIsLevelUpAnimating(true);
@@ -513,46 +495,43 @@ export default function App() {
       type: 'system'
     };
 
-    const updatedUsers = users.map(u => {
-      if (u.id === activeUser.id) return { ...u, balance: u.balance + amount };
-      return u;
-    });
-
-    setUsers(updatedUsers);
-    setTransactions([newTransaction, ...transactions]);
+    const batch = writeBatch(db);
+    
+    const txRef = doc(db, 'transactions', newTransaction.id);
+    batch.set(txRef, newTransaction);
+    
+    const userRef = doc(db, 'users', activeUser.id);
+    batch.update(userRef, { balance: activeUser.balance + amount });
+    
+    batch.commit().catch(console.error);
   };
 
   const handleConfirmTransactions = () => {
+    const batch = writeBatch(db);
     let totalAmountConfirmed = 0;
-    const updatedTransactions = transactions.map(t => {
+    
+    transactions.forEach(t => {
       if (t.toId === activeUser.id && t.confirmed === false) {
         totalAmountConfirmed += t.amount;
-        return { ...t, confirmed: true };
+        const txRef = doc(db, 'transactions', t.id);
+        batch.update(txRef, { confirmed: true });
       }
-      return t;
     });
     
-    let levelUpOccurred = false;
-    const updatedUsers = users.map(u => {
-      if (u.id === activeUser.id) {
-        const newCumulative = u.cumulativeValue + totalAmountConfirmed;
-        const newLevel = calculateLevel(newCumulative);
-        if (newLevel > u.level) {
-          levelUpOccurred = true;
-        }
-        return { 
-          ...u, 
-          cumulativeValue: newCumulative, 
-          unconfirmedValue: Math.max(0, u.unconfirmedValue - totalAmountConfirmed),
-          level: newLevel
-        };
-      }
-      return u;
+    const newCumulative = activeUser.cumulativeValue + totalAmountConfirmed;
+    const newLevel = calculateLevel(newCumulative);
+    const levelUpOccurred = newLevel > activeUser.level;
+
+    const userRef = doc(db, 'users', activeUser.id);
+    batch.update(userRef, {
+      cumulativeValue: newCumulative,
+      unconfirmedValue: Math.max(0, activeUser.unconfirmedValue - totalAmountConfirmed),
+      level: newLevel
     });
 
-    setTransactions(updatedTransactions);
-    setUsers(updatedUsers);
-    setPendingTransactions([]);
+    batch.commit().then(() => {
+      setPendingTransactions([]);
+    }).catch(console.error);
 
     if (levelUpOccurred) {
       setIsLevelUpAnimating(true);
