@@ -64,15 +64,15 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidUser(request.resource.data);
-      allow update: if isAuthenticated() && isValidUser(request.resource.data);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
       allow delete: if false;
     }
 
     match /transactions/{transactionId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
-      allow update: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
       allow delete: if false;
     }
   }
