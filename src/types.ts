@@ -30,5 +30,5 @@ export const INITIAL_USERS: User[] = [
   { id: 'user-6', name: '정슬기', balance: 100, cumulativeValue: 0, unconfirmedValue: 0, level: 1, avatar: 'https://picsum.photos/seed/jungseulgi/100/100' },
   { id: 'user-7', name: '신다영', balance: 100, cumulativeValue: 0, unconfirmedValue: 0, level: 1, avatar: 'https://picsum.photos/seed/shindayoung/100/100' },
   { id: 'user-8', name: '김남철', balance: 100, cumulativeValue: 0, unconfirmedValue: 0, level: 1, avatar: 'https://picsum.photos/seed/kimnamchul/100/100' },
-  { id: 'system', name: '시스템', balance: Infinity, cumulativeValue: 0, unconfirmedValue: 0, level: 5, avatar: 'https://picsum.photos/seed/system/100/100' },
+  { id: 'system', name: '시스템', balance: 999999999, cumulativeValue: 0, unconfirmedValue: 0, level: 5, avatar: 'https://picsum.photos/seed/system/100/100' },
 ];
