@@ -92,6 +92,8 @@ export default function App() {
   const [aiInput, setAiInput] = useState('');
   const [aiMessages, setAiMessages] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  
+  console.log("App component rendering");
 
   // Firebase Sync
   useEffect(() => {
