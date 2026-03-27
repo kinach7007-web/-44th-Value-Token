@@ -65,8 +65,42 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(true);
   const [authUser, setAuthUser] = useState<any>(null);
 
-  const [currentUserId, setCurrentUserId] = useState<string | null>('user-1'); // Default to user-1
+  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('currentUserId');
+    } catch (e) {
+      return null;
+    }
+  });
+  
   const activeUser = useMemo(() => users.find(u => u.id === currentUserId) || users[0], [users, currentUserId]);
+
+  // Member Selection Screen
+  if (!currentUserId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4">
+        <h1 className="text-2xl font-bold mb-6">멤버를 선택해주세요</h1>
+        <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
+          {users.map(user => (
+            <button
+              key={user.id}
+              onClick={() => {
+                try {
+                  localStorage.setItem('currentUserId', user.id);
+                  window.location.reload();
+                } catch (e) {
+                  console.error("Failed to save to localStorage", e);
+                }
+              }}
+              className="p-4 bg-white rounded-lg shadow hover:bg-blue-50 transition text-center"
+            >
+              {user.name}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
@@ -96,16 +130,13 @@ export default function App() {
   console.log("App component rendering. isAuthReady:", isAuthReady);
 
   // Firebase Sync
-  useEffect(() => {
-    console.log("Setting isAuthReady to true");
-    setIsAuthReady(true);
-  }, []);
-
   const handleLogout = async () => {
     try {
       await auth.signOut();
       setCurrentUserId(null);
       setAuthUser(null);
+      localStorage.removeItem('currentUserId');
+      window.location.reload();
     } catch (error) {
       console.error("Logout failed:", error);
     }
@@ -341,10 +372,11 @@ export default function App() {
     } catch (err: any) {
       console.error("Failed to send token:", err);
       // Log detailed error info
-      if (err.code === 'permission-denied') {
-        console.error("Permission denied. Check Firestore rules and user authentication.");
+      if (err.code === 'permission-denied' || (err.message && err.message.includes('permission'))) {
+        alert("토큰 전송 권한이 없습니다. 관리자에게 문의하세요.");
+      } else {
+        alert(`토큰 전송에 실패했습니다: ${err.message}`);
       }
-      alert(`토큰 전송에 실패했습니다: ${err.message}`);
     } finally {
       setIsSending(false);
     }
