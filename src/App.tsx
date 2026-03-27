@@ -84,8 +84,8 @@ export default function App() {
     return [];
   });
 
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const activeUser = currentUser || users[0];
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const activeUser = currentUserId ? users.find(u => u.id === currentUserId) || users[0] : users[0];
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
@@ -112,7 +112,7 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // Persistence
+  // Persistence & Cross-tab Sync
   useEffect(() => {
     localStorage.setItem('vts_users_v3', JSON.stringify(users));
   }, [users]);
@@ -120,6 +120,35 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('vts_transactions_v3', JSON.stringify(transactions));
   }, [transactions]);
+
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'vts_users_v3' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue) as User[];
+          setUsers(parsed.map(user => ({
+            ...user,
+            cumulativeValue: user.cumulativeValue ?? 0,
+            unconfirmedValue: user.unconfirmedValue ?? 0,
+            level: user.level ?? 1,
+            balance: user.balance ?? 0
+          })));
+        } catch (err) {
+          console.error('Failed to parse users from storage event', err);
+        }
+      }
+      if (e.key === 'vts_transactions_v3' && e.newValue) {
+        try {
+          setTransactions(JSON.parse(e.newValue));
+        } catch (err) {
+          console.error('Failed to parse transactions from storage event', err);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   // Check for unconfirmed transactions for current user
   useEffect(() => {
@@ -289,7 +318,6 @@ export default function App() {
 
     setUsers(updatedUsers);
     setTransactions([newTransaction, ...transactions]);
-    setCurrentUser(updatedUsers.find(u => u.id === activeUser.id)!);
     
     // Reset form
     setIsSendModalOpen(false);
@@ -334,7 +362,6 @@ export default function App() {
 
     setTransactions(updatedTransactions);
     setUsers(updatedUsers);
-    setCurrentUser(updatedUsers.find(u => u.id === activeUser.id)!);
     
     if (levelUpOccurred) {
       setIsLevelUpAnimating(true);
@@ -493,7 +520,6 @@ export default function App() {
 
     setUsers(updatedUsers);
     setTransactions([newTransaction, ...transactions]);
-    setCurrentUser(updatedUsers.find(u => u.id === activeUser.id)!);
   };
 
   const handleConfirmTransactions = () => {
@@ -526,7 +552,6 @@ export default function App() {
 
     setTransactions(updatedTransactions);
     setUsers(updatedUsers);
-    setCurrentUser(updatedUsers.find(u => u.id === activeUser.id)!);
     setPendingTransactions([]);
 
     if (levelUpOccurred) {
@@ -621,7 +646,7 @@ export default function App() {
 
   const currentLevel = getUserLevel(activeUser.cumulativeValue);
 
-  if (!currentUser) {
+  if (!currentUserId) {
     return (
       <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50 p-4">
         {/* Dreamy Background Elements */}
@@ -640,7 +665,7 @@ export default function App() {
             {users.filter(u => u.id !== 'system').map(u => (
               <button
                 key={u.id}
-                onClick={() => setCurrentUser(u)}
+                onClick={() => setCurrentUserId(u.id)}
                 className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all group"
               >
                 <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center text-2xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">
@@ -742,7 +767,7 @@ export default function App() {
               </button>
 
               <button 
-                onClick={() => setCurrentUser(null)}
+                onClick={() => setCurrentUserId(null)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-white text-gray-600 shadow-sm hover:shadow-md hover:bg-gray-50 transition-all"
               >
                 <LogOut size={16} />
