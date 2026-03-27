@@ -58,7 +58,7 @@ const getUserLevel = (cumulativeValue: number) => {
 export default function App() {
   // State
   const [users, setUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('vts_users_v3');
+    const saved = localStorage.getItem('vts_users_v4');
     if (!saved) return INITIAL_USERS;
     
     try {
@@ -78,7 +78,7 @@ export default function App() {
   });
   
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('vts_transactions_v3');
+    const saved = localStorage.getItem('vts_transactions_v4');
     if (saved) return JSON.parse(saved);
     
     return [];
@@ -114,16 +114,16 @@ export default function App() {
 
   // Persistence & Cross-tab Sync
   useEffect(() => {
-    localStorage.setItem('vts_users_v3', JSON.stringify(users));
+    localStorage.setItem('vts_users_v4', JSON.stringify(users));
   }, [users]);
 
   useEffect(() => {
-    localStorage.setItem('vts_transactions_v3', JSON.stringify(transactions));
+    localStorage.setItem('vts_transactions_v4', JSON.stringify(transactions));
   }, [transactions]);
 
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'vts_users_v3' && e.newValue) {
+      if (e.key === 'vts_users_v4' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue) as User[];
           setUsers(parsed.map(user => ({
@@ -137,7 +137,7 @@ export default function App() {
           console.error('Failed to parse users from storage event', err);
         }
       }
-      if (e.key === 'vts_transactions_v3' && e.newValue) {
+      if (e.key === 'vts_transactions_v4' && e.newValue) {
         try {
           setTransactions(JSON.parse(e.newValue));
         } catch (err) {
