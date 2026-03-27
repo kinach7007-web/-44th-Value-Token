@@ -22,7 +22,9 @@ import {
   Coins,
   Trophy,
   X,
-  LogOut
+  LogOut,
+  UserCircle,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, startOfDay, subDays, isSameDay, startOfWeek, startOfMonth } from 'date-fns';
@@ -43,7 +45,7 @@ import {
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
 import { collection, doc, onSnapshot, setDoc, writeBatch, query, orderBy } from 'firebase/firestore';
-import { db, auth, googleProvider } from './firebase';
+import { db, auth, googleProvider, signInAnonymously } from './firebase';
 import { onAuthStateChanged, signInWithPopup } from 'firebase/auth';
 
 // Utility for tailwind classes
@@ -111,8 +113,26 @@ export default function App() {
       console.error("Login failed:", error);
       if (error.code === 'auth/popup-blocked') {
         alert("팝업이 차단되었습니다. 브라우저 설정에서 팝업을 허용해주세요.");
+      } else if (error.code === 'auth/admin-restricted-operation') {
+        alert("구글 로그인이 비활성화되어 있습니다. 파이어베이스 콘솔에서 Google 인증을 활성화해주세요.");
       } else {
-        alert("로그인에 실패했습니다. 다시 시도해주세요.");
+        alert(`로그인에 실패했습니다: ${error.message}\n\n브라우저 상단 주소창 옆의 '새 창에서 열기' 버튼을 눌러 시도해보세요.`);
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    setIsLoggingIn(true);
+    try {
+      await signInAnonymously(auth);
+    } catch (error: any) {
+      console.error("Guest login failed:", error);
+      if (error.code === 'auth/admin-restricted-operation') {
+        alert("익명 로그인이 비활성화되어 있습니다. 파이어베이스 콘솔(Authentication > Sign-in method)에서 '익명' 로그인을 사용 설정해주세요.");
+      } else {
+        alert(`익명 로그인에 실패했습니다: ${error.message}`);
       }
     } finally {
       setIsLoggingIn(false);
@@ -712,28 +732,51 @@ export default function App() {
             성장하는 즐거움을 경험해보세요!
           </p>
           
-          <button
-            onClick={handleGoogleLogin}
-            disabled={isLoggingIn}
-            className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-bold py-5 px-6 rounded-2xl border border-gray-200 shadow-sm hover:bg-gray-50 hover:border-gray-300 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoggingIn ? (
-              <>
-                <Loader2 className="animate-spin text-indigo-600" size={24} />
-                로그인 중...
-              </>
-            ) : (
-              <>
-                <svg className="w-6 h-6" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.39-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                </svg>
-                Google 계정으로 시작하기
-              </>
-            )}
-          </button>
+          <div className="space-y-3">
+            <button
+              onClick={handleGoogleLogin}
+              disabled={isLoggingIn}
+              className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 font-bold py-5 px-6 rounded-2xl border border-gray-200 shadow-sm hover:bg-gray-50 hover:border-gray-300 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoggingIn ? (
+                <>
+                  <Loader2 className="animate-spin text-indigo-600" size={24} />
+                  로그인 중...
+                </>
+              ) : (
+                <>
+                  <svg className="w-6 h-6" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.39-.35-2.1s.13-1.44.35-2.1V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.84z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                  Google 계정으로 시작하기
+                </>
+              )}
+            </button>
+
+            <button
+              onClick={handleGuestLogin}
+              disabled={isLoggingIn}
+              className="w-full flex items-center justify-center gap-4 bg-gray-100 text-gray-600 font-bold py-4 px-6 rounded-2xl border border-transparent hover:bg-gray-200 transition-all active:scale-[0.98] disabled:opacity-50"
+            >
+              <UserCircle size={24} />
+              게스트로 시작하기 (익명)
+            </button>
+          </div>
+          
+          <div className="mt-8 p-4 bg-blue-50 rounded-2xl text-left border border-blue-100">
+            <p className="text-xs text-blue-700 font-bold mb-2 flex items-center gap-2">
+              <Info size={14} />
+              로그인이 안 되시나요?
+            </p>
+            <ul className="text-[11px] text-blue-600 space-y-1 list-disc pl-4 leading-relaxed">
+              <li>브라우저 상단 주소창 옆의 <b>'새 창에서 열기'</b> 버튼을 눌러보세요.</li>
+              <li>파이어베이스 콘솔에서 <b>Google</b> 또는 <b>익명</b> 로그인이 활성화되어 있는지 확인해 주세요.</li>
+              <li>브라우저의 팝업 차단 설정을 해제해 주세요.</li>
+            </ul>
+          </div>
           
           <p className="mt-8 text-xs text-gray-400 font-medium">
             로그인 시 서비스 이용 약관에 동의하게 됩니다.
