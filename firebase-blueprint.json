@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "시스템 사용자 정보 및 토큰 잔액",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "balance": { "type": "number", "description": "현재 보유 토큰 잔액" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "balance"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "토큰 거래 내역",
+      "type": "object",
+      "properties": {
+        "fromUid": { "type": "string", "description": "보낸 사람 UID (시스템 지급일 경우 'system')" },
+        "toUid": { "type": "string", "description": "받는 사람 UID" },
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["transfer", "reward", "purchase"] },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "note": { "type": "string" }
+      },
+      "required": ["fromUid", "toUid", "amount", "type", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users/{uid}": {
+      "schema": "User",
+      "description": "사용자 프로필 및 잔액 정보"
+    },
+    "transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "모든 토큰 거래 기록"
+    }
+  }
+}
