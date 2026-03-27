@@ -84,7 +84,7 @@ export default function App() {
     return [];
   });
 
-  const [currentUser, setCurrentUser] = useState<User | null>(users[0]);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const activeUser = currentUser || users[0];
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
