@@ -95,20 +95,8 @@ export default function App() {
 
   // Firebase Sync
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        try {
-          await signInAnonymously(auth);
-        } catch (e) {
-          console.error("Auto guest login failed", e);
-          setIsAuthReady(true);
-        }
-      } else {
-        setAuthUser(user);
-        setIsAuthReady(true);
-      }
-    });
-    return () => unsubscribeAuth();
+    // Skip authentication check and just load data
+    setIsAuthReady(true);
   }, []);
 
   const handleLogout = async () => {
@@ -122,7 +110,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!isAuthReady || !authUser) return;
+    if (!isAuthReady) return;
 
     const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       if (snapshot.empty) {
@@ -155,7 +143,7 @@ export default function App() {
       unsubscribeUsers();
       unsubscribeTransactions();
     };
-  }, [isAuthReady, authUser]);
+  }, [isAuthReady]);
 
   // Check for unconfirmed transactions for current user
   useEffect(() => {
