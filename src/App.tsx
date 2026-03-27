@@ -333,6 +333,7 @@ export default function App() {
     batch.update(toUserRef, { unconfirmedValue: targetUser.unconfirmedValue + amount });
     
     try {
+      console.log("Attempting batch commit. Auth state:", auth.currentUser?.uid);
       await batch.commit();
       
       // Reset form
@@ -349,6 +350,10 @@ export default function App() {
       triggerRocket(rect);
     } catch (err: any) {
       console.error("Failed to send token:", err);
+      // Log detailed error info
+      if (err.code === 'permission-denied') {
+        console.error("Permission denied. Check Firestore rules and user authentication.");
+      }
       alert(`토큰 전송에 실패했습니다: ${err.message}`);
     } finally {
       setIsSending(false);
