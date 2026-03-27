@@ -62,19 +62,11 @@ export default function App() {
   // State
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isAuthReady, setIsAuthReady] = useState(true);
   const [authUser, setAuthUser] = useState<any>(null);
 
   const [currentUserId, setCurrentUserId] = useState<string | null>('user-1'); // Default to user-1
   const activeUser = useMemo(() => users.find(u => u.id === currentUserId) || users[0], [users, currentUserId]);
-
-  if (!isAuthReady) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-50">
-        <div className="text-xl text-gray-600">로딩 중...</div>
-      </div>
-    );
-  }
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
@@ -101,11 +93,11 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   
-  console.log("App component rendering");
+  console.log("App component rendering. isAuthReady:", isAuthReady);
 
   // Firebase Sync
   useEffect(() => {
-    // Skip authentication check and just load data
+    console.log("Setting isAuthReady to true");
     setIsAuthReady(true);
   }, []);
 
