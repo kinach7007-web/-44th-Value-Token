@@ -40,8 +40,7 @@ service cloud.firestore {
     }
 
     function isValidUser(data) {
-      return request.resource.data.keys().hasOnly(['id', 'name', 'avatar', 'cumulativeValue', 'unconfirmedValue', 'level', 'balance']) &&
-             (!('id' in data) || data.id is string) &&
+      return (!('id' in data) || data.id is string) &&
              (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() < 100)) &&
              (!('avatar' in data) || (data.avatar is string && data.avatar.size() < 200)) &&
              (!('cumulativeValue' in data) || (data.cumulativeValue is number && data.cumulativeValue >= 0)) &&
@@ -51,17 +50,16 @@ service cloud.firestore {
     }
 
     function isValidTransaction(data) {
-      return hasOnlyAllowedFields(['id', 'fromId', 'toId', 'fromName', 'toName', 'amount', 'note', 'timestamp', 'confirmed', 'type']) &&
-             data.id is string &&
-             data.fromId is string &&
-             data.toId is string &&
-             data.fromName is string &&
-             data.toName is string &&
-             data.amount is number && data.amount > 0 &&
-             data.note is string && data.note.size() < 1000 &&
-             data.timestamp is number &&
-             data.type is string &&
-             data.confirmed is bool;
+      return (!('id' in data) || data.id is string) &&
+             (!('fromId' in data) || data.fromId is string) &&
+             (!('toId' in data) || data.toId is string) &&
+             (!('fromName' in data) || data.fromName is string) &&
+             (!('toName' in data) || data.toName is string) &&
+             (!('amount' in data) || (data.amount is number && data.amount > 0)) &&
+             (!('note' in data) || (data.note is string && data.note.size() < 1000)) &&
+             (!('timestamp' in data) || data.timestamp is number) &&
+             (!('type' in data) || data.type is string) &&
+             (!('confirmed' in data) || data.confirmed is bool);
     }
 
     match /users/{userId} {
