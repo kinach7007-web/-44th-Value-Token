@@ -1,5 +1,4 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
     // ===============================================================
@@ -7,67 +6,89 @@ service cloud.firestore {
     // ===============================================================
     //
     // Collection: users
-    // Document ID: {userId}
+    // Document ID: userId (e.g., user-1)
     // Fields:
-    //   - id: string
-    //   - name: string
-    //   - avatar: string
-    //   - cumulativeValue: number
-    //   - unconfirmedValue: number
-    //   - level: number
-    //   - balance: number
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - avatar: string (required)
+    //   - cumulativeValue: number (required)
+    //   - unconfirmedValue: number (required)
+    //   - level: number (required)
+    //   - balance: number (required)
     //
     // Collection: transactions
-    // Document ID: {transactionId}
+    // Document ID: transactionId (auto-generated)
     // Fields:
-    //   - id: string
-    //   - fromId: string
-    //   - toId: string
-    //   - amount: number
-    //   - note: string
-    //   - timestamp: number
-    //   - confirmed: boolean
+    //   - id: string (required)
+    //   - fromId: string (required)
+    //   - toId: string (required)
+    //   - fromName: string (required)
+    //   - toName: string (required)
+    //   - amount: number (required)
+    //   - note: string (required)
+    //   - timestamp: timestamp/number (required)
+    //   - type: string (required)
+    //   - confirmed: boolean (optional)
     //
     // ===============================================================
 
+    // ===============================================================
     // Helper Functions
+    // ===============================================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "kinach7007@gmail.com" && request.auth.token.email_verified == true));
     }
 
     function isValidUser(data) {
-      return (!('id' in data) || data.id is string) &&
-             (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() < 100)) &&
-             (!('avatar' in data) || (data.avatar is string && data.avatar.size() < 200)) &&
-             (!('cumulativeValue' in data) || (data.cumulativeValue is number && data.cumulativeValue >= 0)) &&
-             (!('unconfirmedValue' in data) || (data.unconfirmedValue is number && data.unconfirmedValue >= 0)) &&
-             (!('level' in data) || (data.level is number && data.level >= 1)) &&
-             (!('balance' in data) || (data.balance is number && data.balance >= 0));
+      return data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.avatar is string &&
+             data.cumulativeValue is number &&
+             data.unconfirmedValue is number &&
+             data.level is number &&
+             data.balance is number;
     }
 
     function isValidTransaction(data) {
-      return (!('id' in data) || data.id is string) &&
-             (!('fromId' in data) || data.fromId is string) &&
-             (!('toId' in data) || data.toId is string) &&
-             (!('fromName' in data) || data.fromName is string) &&
-             (!('toName' in data) || data.toName is string) &&
-             (!('amount' in data) || (data.amount is number && data.amount > 0)) &&
-             (!('note' in data) || (data.note is string && data.note.size() < 1000)) &&
-             (!('timestamp' in data) || data.timestamp is number) &&
-             (!('type' in data) || data.type is string) &&
-             (!('confirmed' in data) || data.confirmed is bool);
+      return data.id is string &&
+             data.fromId is string &&
+             data.toId is string &&
+             data.fromName is string &&
+             data.toName is string &&
+             data.amount is number && data.amount > 0 &&
+             data.note is string && data.note.size() < 500 &&
+             (data.timestamp is timestamp || data.timestamp is number) &&
+             data.type in ['transfer', 'reward', 'system'] &&
+             (data.confirmed == true || data.confirmed == false);
     }
 
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if true; // Public profiles for now to allow selection
+      allow create: if isAuthenticated() && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && 
+                      (isAdmin() || 
+                       // Allow atomic updates to balance/value from transactions
+                       (request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance', 'unconfirmedValue', 'cumulativeValue', 'level'])));
+      allow delete: if isAdmin();
     }
 
     match /transactions/{transactionId} {
-      allow read, write: if true;
+      allow read: if true; // Everyone can see the feed
+      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
+      allow update: if isAuthenticated() && 
+                      // In this play app, we don't link Auth UID to User ID, 
+                      // so we allow any authenticated user to confirm if it's not already confirmed.
+                      resource.data.confirmed == false && 
+                      request.resource.data.confirmed == true && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmed']);
+      allow delete: if isAdmin();
     }
   }
 }

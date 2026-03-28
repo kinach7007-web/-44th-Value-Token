@@ -42,14 +42,75 @@ import {
 } from 'recharts';
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
-import { collection, doc, onSnapshot, setDoc, writeBatch, query, orderBy } from 'firebase/firestore';
+import { collection, doc, onSnapshot, setDoc, writeBatch, query, orderBy, getDocs, increment, serverTimestamp, Timestamp } from 'firebase/firestore';
 import { db, auth, signInAnonymously } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
-// Utility for tailwind classes
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  // We don't want to throw here because it might crash the app, but we log it for the agent
+  alert(`오류가 발생했습니다: ${errInfo.error}`);
+}
+
+  // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+const getTimestampValue = (ts: any) => {
+  if (!ts) return Date.now();
+  if (typeof ts === 'number') return ts;
+  if (ts instanceof Timestamp) return ts.toMillis();
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (ts.seconds) return ts.seconds * 1000;
+  return Date.now();
+};
 
 const getUserLevel = (cumulativeValue: number) => {
   if (cumulativeValue >= 1000) return { level: 4, name: '마스터', color: 'bg-purple-100 text-purple-700 border-purple-200', emoji: '☀️' };
@@ -58,12 +119,89 @@ const getUserLevel = (cumulativeValue: number) => {
   return { level: 1, name: '비기너', color: 'bg-orange-100 text-orange-700 border-orange-200', emoji: '🌱' };
 };
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("Uncaught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-red-50 p-4">
+          <div className="bg-white p-8 rounded-3xl shadow-xl max-w-md w-full border border-red-100">
+            <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mb-6">
+              <X className="text-red-600" size={32} />
+            </div>
+            <h1 className="text-2xl font-black text-gray-900 mb-2">오류가 발생했습니다</h1>
+            <p className="text-gray-500 mb-6 font-medium">앱을 불러오는 중 문제가 발생했습니다. 페이지를 새로고침 해주세요.</p>
+            <div className="bg-gray-50 p-4 rounded-xl mb-6 overflow-auto max-h-40">
+              <p className="text-xs font-mono text-red-500">{this.state.error?.message}</p>
+            </div>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all"
+            >
+              새로고침
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <AppContent />
+    </ErrorBoundary>
+  );
+}
+
+function AppContent() {
   // State
   const [users, setUsers] = useState<User[]>(INITIAL_USERS);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [isAuthReady, setIsAuthReady] = useState(true);
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<any>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setAuthUser(user);
+        setIsAuthReady(true);
+      } else {
+        signInAnonymously(auth).catch(err => {
+          console.error("Anonymous sign-in failed:", err);
+          setIsAuthReady(true);
+        });
+      }
+    });
+
+    // Safety timeout: if auth takes more than 5 seconds, force ready
+    const timer = setTimeout(() => {
+      if (!isAuthReady) {
+        console.warn("Auth check timed out. Forcing ready state.");
+        setIsAuthReady(true);
+      }
+    }, 5000);
+
+    return () => {
+      unsubscribe();
+      clearTimeout(timer);
+    };
+  }, [isAuthReady]);
 
   const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
     try {
@@ -73,34 +211,16 @@ export default function App() {
     }
   });
   
-  const activeUser = useMemo(() => users.find(u => u.id === currentUserId) || users[0], [users, currentUserId]);
-
-  // Member Selection Screen
-  if (!currentUserId) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-gray-100 p-4">
-        <h1 className="text-2xl font-bold mb-6">멤버를 선택해주세요</h1>
-        <div className="grid grid-cols-2 gap-4 w-full max-w-sm">
-          {users.map(user => (
-            <button
-              key={user.id}
-              onClick={() => {
-                try {
-                  localStorage.setItem('currentUserId', user.id);
-                  window.location.reload();
-                } catch (e) {
-                  console.error("Failed to save to localStorage", e);
-                }
-              }}
-              className="p-4 bg-white rounded-lg shadow hover:bg-blue-50 transition text-center"
-            >
-              {user.name}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
+  const activeUser = useMemo(() => {
+    if (!currentUserId) return null;
+    const user = users.find(u => u.id === currentUserId);
+    if (!user) {
+      console.log(`ActiveUser not found for ID: ${currentUserId}. Users count: ${users.length}`);
+      return null;
+    }
+    console.log("ActiveUser updated:", { name: user.name, id: user.id, currentUserId });
+    return user;
+  }, [users, currentUserId]);
 
   const [isSendModalOpen, setIsSendModalOpen] = useState(false);
   const [isLaunching, setIsLaunching] = useState(false);
@@ -127,8 +247,6 @@ export default function App() {
   const [aiMessages, setAiMessages] = useState<{role: 'user' | 'ai', content: string}[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
   
-  console.log("App component rendering. isAuthReady:", isAuthReady);
-
   // Firebase Sync
   const handleLogout = async () => {
     try {
@@ -157,16 +275,33 @@ export default function App() {
           console.error("Failed to initialize users:", err);
         });
       } else {
-        const fetchedUsers = snapshot.docs.map(doc => doc.data() as User);
+        const fetchedUsers = snapshot.docs.map(doc => ({
+          ...doc.data(),
+          id: doc.id
+        } as User));
         setUsers(fetchedUsers);
       }
     }, (error) => {
       console.error("Error fetching users:", error);
     });
 
-    const q = query(collection(db, 'transactions'), orderBy('timestamp', 'desc'));
+    const q = query(collection(db, 'transactions'));
     const unsubscribeTransactions = onSnapshot(q, (snapshot) => {
-      const fetchedTransactions = snapshot.docs.map(doc => doc.data() as Transaction);
+      console.log(`[TransactionsSnapshot] Received ${snapshot.size} transactions.`);
+      const fetchedTransactions = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        id: doc.id
+      } as Transaction));
+      
+      // Sort on client to avoid index issues and handle serverTimestamp latency
+      fetchedTransactions.sort((a, b) => getTimestampValue(b.timestamp) - getTimestampValue(a.timestamp));
+      
+      if (fetchedTransactions.length > 0) {
+        console.log('[TransactionsSnapshot] Sample transactions (first 3):', 
+          fetchedTransactions.slice(0, 3).map(t => ({ id: t.id, toId: t.toId, confirmed: t.confirmed, ts: getTimestampValue(t.timestamp) }))
+        );
+      }
+      
       setTransactions(fetchedTransactions);
     }, (error) => {
       console.error("Error fetching transactions:", error);
@@ -180,22 +315,32 @@ export default function App() {
 
   // Check for unconfirmed transactions for current user
   useEffect(() => {
-    const unconfirmed = transactions.filter(t => t.toId === activeUser.id && t.confirmed === false);
-    if (unconfirmed.length > 0) {
-      setPendingTransactions(unconfirmed);
-    } else {
+    if (!activeUser) {
       setPendingTransactions([]);
+      return;
     }
-  }, [activeUser.id, transactions]);
+    
+    const unconfirmed = transactions.filter(t => t.toId === activeUser.id && !t.confirmed);
+    console.log("[PendingTransactions] Filter result:", {
+      activeUserId: activeUser.id,
+      activeUserName: activeUser.name,
+      count: unconfirmed.length,
+      allTransactionsCount: transactions.length,
+      unconfirmedTxIds: unconfirmed.map(t => t.id)
+    });
+    setPendingTransactions(unconfirmed);
+  }, [activeUser?.id, transactions]);
 
   // Derived stats
   const myTransactions = useMemo(() => {
+    if (!activeUser) return [];
     return transactions
       .filter(t => t.fromId === activeUser.id || t.toId === activeUser.id)
-      .sort((a, b) => b.timestamp - a.timestamp);
-  }, [transactions, activeUser.id]);
+      .sort((a, b) => getTimestampValue(b.timestamp) - getTimestampValue(a.timestamp));
+  }, [transactions, activeUser?.id]);
 
   const stats = useMemo(() => {
+    if (!activeUser) return { sent: 0, received: 0 };
     const sent = transactions
       .filter(t => t.fromId === activeUser.id)
       .reduce((acc, t) => acc + t.amount, 0);
@@ -203,7 +348,7 @@ export default function App() {
       .filter(t => t.toId === activeUser.id)
       .reduce((acc, t) => acc + t.amount, 0);
     return { sent, received };
-  }, [transactions, activeUser.id]);
+  }, [transactions, activeUser?.id]);
 
   const chartData = useMemo(() => {
     const last7Days = Array.from({ length: 7 }, (_, i) => {
@@ -216,8 +361,11 @@ export default function App() {
       };
     });
 
+    if (!activeUser) return last7Days;
+
     transactions.forEach(tx => {
-      const txDate = startOfDay(new Date(tx.timestamp));
+      const tsValue = getTimestampValue(tx.timestamp);
+      const txDate = startOfDay(new Date(tsValue));
       const dayData = last7Days.find(d => isSameDay(d.rawDate, txDate));
       if (dayData) {
         if (tx.toId === activeUser.id) dayData.received += tx.amount;
@@ -226,7 +374,7 @@ export default function App() {
     });
 
     return last7Days;
-  }, [transactions, activeUser.id]);
+  }, [transactions, activeUser?.id]);
 
   // Level calculation logic
   const calculateLevel = (cumulative: number) => {
@@ -259,7 +407,7 @@ export default function App() {
         const relevantTransactions = transactions.filter(t => 
           t.toId === user.id && 
           t.confirmed && 
-          (rankingTab === 'weekly' ? new Date(t.timestamp) >= startOfCurrentWeek : new Date(t.timestamp) >= startOfCurrentMonth)
+          (rankingTab === 'weekly' ? new Date(getTimestampValue(t.timestamp)) >= startOfCurrentWeek : new Date(getTimestampValue(t.timestamp)) >= startOfCurrentMonth)
         );
         score = relevantTransactions.reduce((sum, t) => sum + t.amount, 0);
       }
@@ -278,6 +426,8 @@ export default function App() {
     setAiInput('');
     setAiMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsAiLoading(true);
+
+    if (!activeUser) return;
 
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
@@ -304,58 +454,119 @@ export default function App() {
   };
 
   const [isSending, setIsSending] = useState(false);
+  const [isConfirming, setIsConfirming] = useState<string | null>(null);
 
   // Actions
   const handleSendToken = async (e: React.FormEvent) => {
+    console.log("handleSendToken triggered!");
     e.preventDefault();
+    if (isSending) return;
+    if (!activeUser) {
+      alert('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
+      return;
+    }
     
-    // Get the button that triggered the submit
+    if (!sendTargetId) {
+      alert('보낼 대상을 선택해주세요.');
+      return;
+    }
+
+    if (!sendAmount || Number(sendAmount) <= 0) {
+      alert('보낼 금액을 올바르게 입력해주세요.');
+      return;
+    }
+
+    if (!auth.currentUser) {
+      alert('인증 정보가 없습니다. 페이지를 새로고침 해주세요.');
+      return;
+    }
     const submitter = (e.nativeEvent as any).submitter as HTMLElement;
     const rect = submitter?.getBoundingClientRect();
     
     const amount = Number(sendAmount);
     const targetUser = users.find(u => u.id === sendTargetId);
 
-    if (!targetUser || amount <= 0 || amount > activeUser.balance) {
-      alert('유효하지 않은 금액이거나 잔액이 부족합니다.');
+    console.log("handleSendToken started:", {
+      amount,
+      sendTargetId,
+      targetUser: targetUser?.name,
+      activeUser: activeUser?.name,
+      activeUserBalance: activeUser?.balance
+    });
+
+    if (!activeUser) {
+      alert('로그인 정보가 올바르지 않습니다. 페이지를 새로고침 해주세요.');
+      return;
+    }
+
+    if (isNaN(amount) || amount <= 0) {
+      alert('보낼 금액을 올바르게 입력해주세요.');
+      return;
+    }
+
+    if (!targetUser) {
+      alert('보낼 대상을 선택해주세요.');
+      return;
+    }
+
+    if (targetUser.id === activeUser.id) {
+      alert('자기 자신에게는 보낼 수 없습니다.');
+      return;
+    }
+
+    const currentBalance = Number(activeUser.balance) || 0;
+
+    if (amount > currentBalance) {
+      alert(`잔액이 부족합니다. (현재 잔액: ${currentBalance}만원)`);
       return;
     }
     
-    if (amount > 10) {
-      alert('1건당 최대 10만원까지만 보낼 수 있습니다.');
+    if (amount > 100000) {
+      alert('1건당 최대 100,000원까지만 보낼 수 있습니다.');
       return;
     }
 
     setIsSending(true);
-
-    const newTransaction: Transaction = {
-      id: `tx-${Date.now()}`,
-      fromId: activeUser.id,
-      toId: targetUser.id,
-      fromName: activeUser.name,
-      toName: targetUser.name,
-      amount,
-      timestamp: Date.now(),
-      note: sendNote || '가치 인정 토큰 전송',
-      type: 'transfer',
-      confirmed: false
-    };
-
-    // Update Firestore
-    const batch = writeBatch(db);
-    
-    const txRef = doc(db, 'transactions', newTransaction.id);
-    batch.set(txRef, newTransaction);
-    
-    const fromUserRef = doc(db, 'users', activeUser.id);
-    batch.update(fromUserRef, { balance: activeUser.balance - amount });
-    
-    const toUserRef = doc(db, 'users', targetUser.id);
-    batch.update(toUserRef, { unconfirmedValue: targetUser.unconfirmedValue + amount });
     
     try {
+      // Trigger rocket effect immediately for feedback
+      triggerRocket(rect);
+      
+      console.log("Starting batch operations...");
+
+      // Generate a new transaction ID
+      const txRef = doc(collection(db, 'transactions'));
+      const txId = txRef.id;
+
+      const newTransaction: Transaction = {
+        id: txId,
+        fromId: activeUser.id,
+        toId: targetUser.id,
+        fromName: activeUser.name,
+        toName: targetUser.name,
+        amount,
+        timestamp: serverTimestamp(),
+        note: sendNote || '가치 인정 토큰 전송',
+        type: 'transfer',
+        confirmed: false
+      };
+
+      console.log("New transaction created:", newTransaction);
+
+      // Update Firestore
+      const batch = writeBatch(db);
+      
+      batch.set(txRef, newTransaction);
+      
+      const fromUserRef = doc(db, 'users', activeUser.id);
+      batch.update(fromUserRef, { balance: increment(-amount) });
+      
+      const toUserRef = doc(db, 'users', targetUser.id);
+      batch.update(toUserRef, { unconfirmedValue: increment(amount) });
+      
       console.log("Attempting batch commit. Auth state:", auth.currentUser?.uid);
       await batch.commit();
+      console.log("Batch commit successful!");
       
       // Reset form
       setIsSendModalOpen(false);
@@ -368,60 +579,129 @@ export default function App() {
       setSendAmountType('preset');
       
       // Trigger rocket effect
-      triggerRocket(rect);
+      // triggerRocket(rect); // Moved to top
     } catch (err: any) {
       console.error("Failed to send token:", err);
-      // Log detailed error info
-      if (err.code === 'permission-denied' || (err.message && err.message.includes('permission'))) {
-        alert("토큰 전송 권한이 없습니다. 관리자에게 문의하세요.");
-      } else {
-        alert(`토큰 전송에 실패했습니다: ${err.message}`);
-      }
+      alert("토큰 전송 실패: " + (err.message || "알 수 없는 오류가 발생했습니다."));
+      handleFirestoreError(err, OperationType.WRITE, 'transactions/users');
     } finally {
       setIsSending(false);
     }
   };
 
+  const handleResetData = async () => {
+    if (!confirm("모든 거래 내역과 사용자 잔액을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) return;
+
+    try {
+      const batch = writeBatch(db);
+      
+      // 1. Delete all transactions
+      const txSnapshot = await getDocs(collection(db, 'transactions'));
+      txSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+      
+      // 2. Reset all users
+      const userSnapshot = await getDocs(collection(db, 'users'));
+      userSnapshot.docs.forEach(doc => {
+        const resetUser = INITIAL_USERS.find(u => u.id === doc.id);
+        if (resetUser) {
+          batch.update(doc.ref, {
+            balance: resetUser.balance,
+            cumulativeValue: resetUser.cumulativeValue,
+            unconfirmedValue: resetUser.unconfirmedValue,
+            level: resetUser.level
+          });
+        }
+      });
+      
+      await batch.commit();
+      alert("모든 데이터가 초기화되었습니다.");
+      window.location.reload();
+    } catch (err) {
+      console.error("Failed to reset data:", err);
+      alert("데이터 초기화에 실패했습니다.");
+    }
+  };
   const handleConfirmValue = async (txId: string) => {
+    if (isConfirming) return;
+    if (!activeUser) {
+      alert('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
+      return;
+    }
+
+    if (!auth.currentUser) {
+      alert('인증 정보가 없습니다. 페이지를 새로고침 해주세요.');
+      return;
+    }
+
     const tx = transactions.find(t => t.id === txId);
     if (!tx) return;
 
-    const batch = writeBatch(db);
-    
-    const txRef = doc(db, 'transactions', txId);
-    batch.update(txRef, { confirmed: true });
-
-    const newCumulative = activeUser.cumulativeValue + tx.amount;
-    const newLevel = calculateLevel(newCumulative);
-    const levelUpOccurred = newLevel > activeUser.level;
-
-    const userRef = doc(db, 'users', activeUser.id);
-    batch.update(userRef, {
-      cumulativeValue: newCumulative,
-      unconfirmedValue: Math.max(0, activeUser.unconfirmedValue - tx.amount),
-      level: newLevel,
-      balance: activeUser.balance + tx.amount
-    });
-
-    try {
-      await batch.commit();
-    } catch (err: any) {
-      console.error("Failed to confirm transaction:", err);
-      alert(`가치 확인에 실패했습니다: ${err.message}`);
+    if (tx.toId !== activeUser.id) {
+      alert("본인의 가치만 인정할 수 있습니다.");
       return;
     }
-    
-    if (levelUpOccurred) {
-      setIsLevelUpAnimating(true);
-      setTimeout(() => setIsLevelUpAnimating(false), 3000);
+
+    if (tx.confirmed) {
+      alert("이미 인정된 가치입니다.");
+      return;
     }
-    
-    if (effectToggle) {
-      triggerHearts();
-    } else {
-      triggerFireworks();
+
+    setIsConfirming(txId);
+
+    try {
+      console.log("handleConfirmValue started:", {
+        txId,
+        amount: tx.amount,
+        activeUser: activeUser.name
+      });
+
+      const batch = writeBatch(db);
+      
+      const txRef = doc(db, 'transactions', txId);
+      batch.update(txRef, { confirmed: true });
+
+      const currentCumulative = Number(activeUser.cumulativeValue) || 0;
+      const currentLevel = Number(activeUser.level) || 1;
+
+      const newCumulative = currentCumulative + tx.amount;
+      const newLevel = calculateLevel(newCumulative);
+      const levelUpOccurred = newLevel > currentLevel;
+
+      const userRef = doc(db, 'users', activeUser.id);
+      batch.update(userRef, {
+        cumulativeValue: increment(tx.amount),
+        unconfirmedValue: increment(-tx.amount),
+        level: newLevel,
+        balance: increment(tx.amount)
+      });
+
+      await batch.commit();
+      console.log("Confirm batch commit successful!");
+
+      if (levelUpOccurred) {
+        setIsLevelUpAnimating(true);
+        setTimeout(() => setIsLevelUpAnimating(false), 3000);
+        
+        confetti({
+          particleCount: 150,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ['#4f46e5', '#ec4899', '#f59e0b']
+        });
+      }
+
+      if (effectToggle) {
+        triggerHearts();
+      } else {
+        triggerFireworks();
+      }
+      setEffectToggle(!effectToggle);
+    } catch (err: any) {
+      console.error("Failed to confirm value:", err);
+      handleFirestoreError(err, OperationType.UPDATE, `transactions/${txId}`);
+    } finally {
+      setIsConfirming(null);
     }
-    setEffectToggle(!effectToggle);
   };
 
   const triggerRocket = (rect?: DOMRect) => {
@@ -548,15 +828,20 @@ export default function App() {
   };
 
   const handleMintTokens = async () => {
+    if (!activeUser) return;
     const amount = 500;
+    
+    const txRef = doc(collection(db, 'transactions'));
+    const txId = txRef.id;
+
     const newTransaction: Transaction = {
-      id: `tx-${Date.now()}`,
+      id: txId,
       fromId: 'system',
       toId: activeUser.id,
       fromName: 'Vibe AI',
       toName: activeUser.name,
       amount,
-      timestamp: Date.now(),
+      timestamp: serverTimestamp(),
       note: '협업 기여 보상 지급',
       type: 'system',
       confirmed: true
@@ -564,11 +849,10 @@ export default function App() {
 
     const batch = writeBatch(db);
     
-    const txRef = doc(db, 'transactions', newTransaction.id);
     batch.set(txRef, newTransaction);
     
     const userRef = doc(db, 'users', activeUser.id);
-    batch.update(userRef, { balance: activeUser.balance + amount });
+    batch.update(userRef, { balance: increment(amount) });
     
     try {
       await batch.commit();
@@ -579,6 +863,7 @@ export default function App() {
   };
 
   const handleConfirmTransactions = async () => {
+    if (!activeUser) return;
     const batch = writeBatch(db);
     let totalAmountConfirmed = 0;
     
@@ -596,10 +881,10 @@ export default function App() {
 
     const userRef = doc(db, 'users', activeUser.id);
     batch.update(userRef, {
-      cumulativeValue: newCumulative,
-      unconfirmedValue: Math.max(0, activeUser.unconfirmedValue - totalAmountConfirmed),
+      cumulativeValue: increment(totalAmountConfirmed),
+      unconfirmedValue: increment(-totalAmountConfirmed),
       level: newLevel,
-      balance: activeUser.balance + totalAmountConfirmed
+      balance: increment(totalAmountConfirmed)
     });
 
     try {
@@ -683,7 +968,8 @@ export default function App() {
   // Calculate weekly top contributors and receivers
   const weeklyStats = useMemo(() => {
     const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // Monday start
-    const weeklyTransactions = transactions.filter(t => t.timestamp >= weekStart.getTime());
+    const weekStartTime = weekStart.getTime();
+    const weeklyTransactions = transactions.filter(t => getTimestampValue(t.timestamp) >= weekStartTime);
     
     const userStats = users.filter(u => u.id !== 'system').map(u => {
       const sent = weeklyTransactions
@@ -701,19 +987,53 @@ export default function App() {
     return { topContributors, topReceivers };
   }, [transactions, users]);
 
-  const currentLevel = getUserLevel(activeUser.cumulativeValue);
+  // Auto-reset if invalid user ID is stored
+  useEffect(() => {
+    if (isAuthReady && currentUserId && !activeUser && users.length > 0) {
+      // If we have users but the current ID isn't one of them, it's likely an old/invalid ID
+      console.warn(`Invalid currentUserId detected: ${currentUserId}. Resetting...`);
+      setCurrentUserId(null);
+      localStorage.removeItem('currentUserId');
+    }
+  }, [isAuthReady, currentUserId, activeUser, users]);
 
-  if (!isAuthReady) {
+  const currentLevel = activeUser ? getUserLevel(activeUser.cumulativeValue) : null;
+
+  if (!isAuthReady || (currentUserId && !activeUser)) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50">
-        <div className="flex flex-col items-center gap-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50 p-4">
+        <div className="flex flex-col items-center gap-6 text-center max-w-xs">
           <Loader2 className="animate-spin text-indigo-600" size={48} />
-          <p className="text-gray-500 font-medium animate-pulse">데이터를 불러오는 중입니다...</p>
+          <div className="space-y-2">
+            <p className="text-gray-900 font-black text-xl animate-pulse">데이터를 불러오는 중입니다...</p>
+            <p className="text-gray-500 text-sm font-medium">네트워크 상태에 따라 시간이 걸릴 수 있습니다.</p>
+            {!authUser && isAuthReady && (
+              <p className="text-red-500 text-xs font-bold mt-4">
+                인증 오류: Firebase 익명 로그인이 비활성화되어 있을 수 있습니다.
+              </p>
+            )}
+          </div>
+          
+          <div className="pt-8 w-full">
+            <button 
+              onClick={() => {
+                setIsAuthReady(true);
+                if (currentUserId && !activeUser) {
+                  setCurrentUserId(null);
+                  localStorage.removeItem('currentUserId');
+                }
+              }}
+              className="w-full py-3 px-6 bg-white/50 backdrop-blur-sm border border-gray-200 text-gray-500 rounded-2xl text-sm font-bold hover:bg-white transition-all"
+            >
+              강제로 불러오기
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
+  // Member Selection Screen
   if (!currentUserId) {
     return (
       <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50 p-4">
@@ -733,7 +1053,14 @@ export default function App() {
             {users.filter(u => u.id !== 'system').map(u => (
               <button
                 key={u.id}
-                onClick={() => setCurrentUserId(u.id)}
+                onClick={() => {
+                  try {
+                    localStorage.setItem('currentUserId', u.id);
+                    window.location.reload();
+                  } catch (e) {
+                    console.error("Failed to save to localStorage", e);
+                  }
+                }}
                 className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all group"
               >
                 <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center text-2xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">
@@ -920,8 +1247,12 @@ export default function App() {
                           </div>
                           <div className="relative z-10 flex items-center gap-2 shrink-0 mr-3">
                             <span className="text-base font-black">{tx.amount}만원</span>
-                            <div className="w-6 h-6 bg-pink-100 text-pink-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm">
-                              <Check size={12} strokeWidth={3} />
+                            <div className="w-6 h-6 bg-pink-100 text-pink-600 rounded-full flex items-center justify-center transition-opacity shadow-sm">
+                              {isConfirming === tx.id ? (
+                                <Loader2 size={12} className="animate-spin" />
+                              ) : (
+                                <Check size={12} strokeWidth={3} />
+                              )}
                             </div>
                           </div>
                         </motion.button>
@@ -1069,8 +1400,7 @@ export default function App() {
 
                   <button 
                     type="submit"
-                    disabled={!sendTargetId || !sendAmount || !sendNote || isSending}
-                    className="w-full bg-indigo-600 text-white py-6 rounded-[2rem] font-black text-xl shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all disabled:opacity-50 disabled:bg-gray-300 flex items-center justify-center"
+                    className="w-full bg-indigo-600 text-white py-6 rounded-[2rem] font-black text-xl shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center"
                   >
                     {isSending ? <Loader2 className="animate-spin" size={24} /> : '가치 인정하기'}
                   </button>
@@ -1249,7 +1579,7 @@ export default function App() {
                     disabled={isSending}
                     className="flex-[2] bg-indigo-600 text-white font-black py-5 rounded-2xl shadow-xl shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center"
                   >
-                    {isSending ? <Loader2 className="animate-spin" size={24} /> : '보내기'}
+                    {isSending ? <Loader2 className="animate-spin" size={24} /> : '가치 인정하기'}
                   </button>
                 </div>
               </form>
@@ -1311,7 +1641,7 @@ export default function App() {
               <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                 <h3 className="text-xl font-black text-gray-900 flex items-center gap-2">
                   <Trophy className="text-indigo-600" />
-                  가치토큰 레벨 시스템
+                  가치토큰 레벨 관리자
                 </h3>
                 <button 
                   onClick={() => setIsLevelModalOpen(false)}
