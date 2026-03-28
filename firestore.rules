@@ -41,8 +41,9 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+      let userDoc = request.auth != null ? get(/databases/$(database)/documents/users/$(request.auth.uid)) : null;
+      return request.auth != null &&
+        ((userDoc != null && userDoc.data.role == 'admin') ||
           (request.auth.token.email == "kinach7007@gmail.com" && request.auth.token.email_verified == true));
     }
 
@@ -71,21 +72,17 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if true; // Public profiles for now to allow selection
-      allow create: if isAuthenticated() && isValidUser(request.resource.data);
-      allow update: if isAuthenticated() && 
-                      (isAdmin() || 
+      allow create: if isValidUser(request.resource.data);
+      allow update: if isAdmin() || 
                        // Allow atomic updates to balance/value from transactions
-                       (request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance', 'unconfirmedValue', 'cumulativeValue', 'level'])));
+                       (request.resource.data.diff(resource.data).affectedKeys().hasAny(['balance', 'unconfirmedValue', 'cumulativeValue', 'level']));
       allow delete: if isAdmin();
     }
 
     match /transactions/{transactionId} {
       allow read: if true; // Everyone can see the feed
-      allow create: if isAuthenticated() && isValidTransaction(request.resource.data);
-      allow update: if isAuthenticated() && 
-                      // In this play app, we don't link Auth UID to User ID, 
-                      // so we allow any authenticated user to confirm if it's not already confirmed.
-                      resource.data.confirmed == false && 
+      allow create: if isValidTransaction(request.resource.data);
+      allow update: if resource.data.confirmed == false && 
                       request.resource.data.confirmed == true && 
                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmed']);
       allow delete: if isAdmin();

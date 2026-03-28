@@ -43,7 +43,7 @@ import {
 import { GoogleGenAI } from "@google/genai";
 import Markdown from 'react-markdown';
 import { collection, doc, onSnapshot, setDoc, writeBatch, query, orderBy, getDocs, increment, serverTimestamp, Timestamp } from 'firebase/firestore';
-import { db, auth, signInAnonymously } from './firebase';
+import { db, auth, googleProvider } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
 enum OperationType {
@@ -95,7 +95,6 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   // We don't want to throw here because it might crash the app, but we log it for the agent
-  alert(`오류가 발생했습니다: ${errInfo.error}`);
 }
 
   // Utility for tailwind classes
@@ -178,15 +177,8 @@ function AppContent() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        setAuthUser(user);
-        setIsAuthReady(true);
-      } else {
-        signInAnonymously(auth).catch(err => {
-          console.error("Anonymous sign-in failed:", err);
-          setIsAuthReady(true);
-        });
-      }
+      setAuthUser(user);
+      setIsAuthReady(true);
     });
 
     // Safety timeout: if auth takes more than 5 seconds, force ready
@@ -462,24 +454,20 @@ function AppContent() {
     e.preventDefault();
     if (isSending) return;
     if (!activeUser) {
-      alert('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
+      console.error('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
       return;
     }
     
     if (!sendTargetId) {
-      alert('보낼 대상을 선택해주세요.');
+      console.error('보낼 대상을 선택해주세요.');
       return;
     }
 
     if (!sendAmount || Number(sendAmount) <= 0) {
-      alert('보낼 금액을 올바르게 입력해주세요.');
+      console.error('보낼 금액을 올바르게 입력해주세요.');
       return;
     }
-
-    if (!auth.currentUser) {
-      alert('인증 정보가 없습니다. 페이지를 새로고침 해주세요.');
-      return;
-    }
+    
     const submitter = (e.nativeEvent as any).submitter as HTMLElement;
     const rect = submitter?.getBoundingClientRect();
     
@@ -495,34 +483,34 @@ function AppContent() {
     });
 
     if (!activeUser) {
-      alert('로그인 정보가 올바르지 않습니다. 페이지를 새로고침 해주세요.');
+      console.error('로그인 정보가 올바르지 않습니다. 페이지를 새로고침 해주세요.');
       return;
     }
 
     if (isNaN(amount) || amount <= 0) {
-      alert('보낼 금액을 올바르게 입력해주세요.');
+      console.error('보낼 금액을 올바르게 입력해주세요.');
       return;
     }
 
     if (!targetUser) {
-      alert('보낼 대상을 선택해주세요.');
+      console.error('보낼 대상을 선택해주세요.');
       return;
     }
 
     if (targetUser.id === activeUser.id) {
-      alert('자기 자신에게는 보낼 수 없습니다.');
+      console.error('자기 자신에게는 보낼 수 없습니다.');
       return;
     }
 
     const currentBalance = Number(activeUser.balance) || 0;
 
     if (amount > currentBalance) {
-      alert(`잔액이 부족합니다. (현재 잔액: ${currentBalance}만원)`);
+      console.error(`잔액이 부족합니다. (현재 잔액: ${currentBalance}만원)`);
       return;
     }
     
     if (amount > 100000) {
-      alert('1건당 최대 100,000원까지만 보낼 수 있습니다.');
+      console.error('1건당 최대 100,000원까지만 보낼 수 있습니다.');
       return;
     }
 
@@ -582,7 +570,6 @@ function AppContent() {
       // triggerRocket(rect); // Moved to top
     } catch (err: any) {
       console.error("Failed to send token:", err);
-      alert("토큰 전송 실패: " + (err.message || "알 수 없는 오류가 발생했습니다."));
       handleFirestoreError(err, OperationType.WRITE, 'transactions/users');
     } finally {
       setIsSending(false);
@@ -624,12 +611,7 @@ function AppContent() {
   const handleConfirmValue = async (txId: string) => {
     if (isConfirming) return;
     if (!activeUser) {
-      alert('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
-      return;
-    }
-
-    if (!auth.currentUser) {
-      alert('인증 정보가 없습니다. 페이지를 새로고침 해주세요.');
+      console.error('사용자 정보를 불러오는 중입니다. 잠시만 기다려주세요.');
       return;
     }
 
@@ -637,12 +619,12 @@ function AppContent() {
     if (!tx) return;
 
     if (tx.toId !== activeUser.id) {
-      alert("본인의 가치만 인정할 수 있습니다.");
+      console.error("본인의 가치만 인정할 수 있습니다.");
       return;
     }
 
     if (tx.confirmed) {
-      alert("이미 인정된 가치입니다.");
+      console.error("이미 인정된 가치입니다.");
       return;
     }
 
@@ -858,7 +840,6 @@ function AppContent() {
       await batch.commit();
     } catch (err: any) {
       console.error("Failed to mint token:", err);
-      alert(`보상 지급에 실패했습니다: ${err.message}`);
     }
   };
 
@@ -892,7 +873,6 @@ function AppContent() {
       setPendingTransactions([]);
     } catch (err: any) {
       console.error("Failed to confirm all transactions:", err);
-      alert(`가치 확인에 실패했습니다: ${err.message}`);
       return;
     }
 
@@ -999,42 +979,8 @@ function AppContent() {
 
   const currentLevel = activeUser ? getUserLevel(activeUser.cumulativeValue) : null;
 
-  if (!isAuthReady || (currentUserId && !activeUser)) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50 p-4">
-        <div className="flex flex-col items-center gap-6 text-center max-w-xs">
-          <Loader2 className="animate-spin text-indigo-600" size={48} />
-          <div className="space-y-2">
-            <p className="text-gray-900 font-black text-xl animate-pulse">데이터를 불러오는 중입니다...</p>
-            <p className="text-gray-500 text-sm font-medium">네트워크 상태에 따라 시간이 걸릴 수 있습니다.</p>
-            {!authUser && isAuthReady && (
-              <p className="text-red-500 text-xs font-bold mt-4">
-                인증 오류: Firebase 익명 로그인이 비활성화되어 있을 수 있습니다.
-              </p>
-            )}
-          </div>
-          
-          <div className="pt-8 w-full">
-            <button 
-              onClick={() => {
-                setIsAuthReady(true);
-                if (currentUserId && !activeUser) {
-                  setCurrentUserId(null);
-                  localStorage.removeItem('currentUserId');
-                }
-              }}
-              className="w-full py-3 px-6 bg-white/50 backdrop-blur-sm border border-gray-200 text-gray-500 rounded-2xl text-sm font-bold hover:bg-white transition-all"
-            >
-              강제로 불러오기
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Member Selection Screen
-  if (!currentUserId) {
+  if (!currentUserId || !activeUser) {
     return (
       <div className="min-h-screen relative overflow-hidden flex items-center justify-center bg-gradient-to-b from-blue-100 via-indigo-50 to-orange-50 p-4">
         {/* Dreamy Background Elements */}
@@ -1047,8 +993,8 @@ function AppContent() {
             <Coins size={32} fill="white" />
           </div>
           <h1 className="text-2xl font-black text-gray-900 mb-2">가치토큰 놀이</h1>
-          <p className="text-gray-500 mb-8 font-medium">로그인할 프로필을 선택해주세요</p>
-          
+          <p className="text-gray-500 mb-6 font-medium">로그인할 프로필을 선택해주세요</p>
+
           <div className="space-y-3">
             {users.filter(u => u.id !== 'system').map(u => (
               <button
@@ -1419,11 +1365,11 @@ function AppContent() {
                   </div>
                 </div>
                 <div className="divide-y divide-gray-50 max-h-[250px] overflow-y-auto custom-scrollbar pr-2">
-                  {transactions.filter(t => isSameDay(new Date(t.timestamp), new Date())).length === 0 ? (
+                  {transactions.filter(t => isSameDay(new Date(getTimestampValue(t.timestamp)), new Date())).length === 0 ? (
                     <p className="text-xs text-gray-400 text-center py-3">오늘 전달된 토큰이 없습니다.</p>
                   ) : (
                     transactions
-                      .filter(t => isSameDay(new Date(t.timestamp), new Date()))
+                      .filter(t => isSameDay(new Date(getTimestampValue(t.timestamp)), new Date()))
                       .slice(0, 10)
                       .map(tx => (
                         <div key={tx.id} className="py-2.5">
@@ -1433,7 +1379,7 @@ function AppContent() {
                               <ChevronRight size={8} className="text-gray-300" />
                               <span className="text-[10px] font-black text-emerald-600">{tx.toName}</span>
                             </div>
-                            <span className="text-[9px] font-bold text-gray-400">{format(tx.timestamp, 'HH:mm', { locale: ko })}</span>
+                            <span className="text-[9px] font-bold text-gray-400">{format(getTimestampValue(tx.timestamp), 'HH:mm', { locale: ko })}</span>
                           </div>
                           <div className="flex justify-between items-center">
                             <p className="text-[10px] text-gray-500 line-clamp-1 flex-1 pr-2">"{tx.note}"</p>
