@@ -111,7 +111,24 @@ const getTimestampValue = (ts: any) => {
   return Date.now();
 };
 
+const formatCurrency = (amount: number) => {
+  if (amount >= 10000) {
+    const eok = Math.floor(amount / 10000);
+    const man = amount % 10000;
+    if (man === 0) {
+      return `${eok.toLocaleString()}억`;
+    }
+    return `${eok.toLocaleString()}억 ${man.toLocaleString()}만원`;
+  }
+  return `${amount.toLocaleString()}만원`;
+};
+
 const getUserLevel = (cumulativeValue: number) => {
+  if (cumulativeValue >= 10000) return { level: 9, name: '레전드', color: 'bg-yellow-100 text-yellow-700 border-yellow-200', emoji: '👑' };
+  if (cumulativeValue >= 7000) return { level: 8, name: '그랜드마스터', color: 'bg-slate-100 text-slate-700 border-slate-200', emoji: '💎' };
+  if (cumulativeValue >= 5000) return { level: 7, name: '챔피언', color: 'bg-red-100 text-red-700 border-red-200', emoji: '🏆' };
+  if (cumulativeValue >= 3000) return { level: 6, name: '히어로', color: 'bg-indigo-100 text-indigo-700 border-indigo-200', emoji: '🦸' };
+  if (cumulativeValue >= 2000) return { level: 5, name: '엑스퍼트', color: 'bg-teal-100 text-teal-700 border-teal-200', emoji: '🌟' };
   if (cumulativeValue >= 1000) return { level: 4, name: '마스터', color: 'bg-purple-100 text-purple-700 border-purple-200', emoji: '☀️' };
   if (cumulativeValue >= 100) return { level: 3, name: '프로', color: 'bg-blue-100 text-blue-700 border-blue-200', emoji: '🌳' };
   if (cumulativeValue >= 50) return { level: 2, name: '챌린저', color: 'bg-green-100 text-green-700 border-green-200', emoji: '🌸' };
@@ -195,13 +212,7 @@ function AppContent() {
     };
   }, [isAuthReady]);
 
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem('currentUserId');
-    } catch (e) {
-      return null;
-    }
-  });
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   
   const activeUser = useMemo(() => {
     if (!currentUserId) return null;
@@ -245,8 +256,6 @@ function AppContent() {
       await auth.signOut();
       setCurrentUserId(null);
       setAuthUser(null);
-      localStorage.removeItem('currentUserId');
-      window.location.reload();
     } catch (error) {
       console.error("Logout failed:", error);
     }
@@ -370,6 +379,11 @@ function AppContent() {
 
   // Level calculation logic
   const calculateLevel = (cumulative: number) => {
+    if (cumulative >= 10000) return 9;
+    if (cumulative >= 7000) return 8;
+    if (cumulative >= 5000) return 7;
+    if (cumulative >= 3000) return 6;
+    if (cumulative >= 2000) return 5;
     if (cumulative >= 1000) return 4;
     if (cumulative >= 100) return 3;
     if (cumulative >= 50) return 2;
@@ -377,8 +391,8 @@ function AppContent() {
   };
 
   const getLevelProgress = (cumulative: number) => {
-    if (cumulative >= 1000) return 100;
-    const levels = [0, 50, 100, 1000];
+    if (cumulative >= 10000) return 100;
+    const levels = [0, 50, 100, 1000, 2000, 3000, 5000, 7000, 10000];
     const currentLevel = calculateLevel(cumulative);
     const min = levels[currentLevel - 1];
     const max = levels[currentLevel];
@@ -431,7 +445,7 @@ function AppContent() {
           systemInstruction: `당신은 'Vibe Coding AI' 플랫폼의 '크랙타임' 전문 AI 상담사입니다. 
           사용자의 관점을 밝게 바꿔주고, 긍정적인 에너지를 불어넣어주는 조언을 해줍니다.
           친절하고 전문적인 어조로 답변하며, 한국어를 사용하세요.
-          사용자 정보: ${activeUser.name} (ID: ${activeUser.id}, 잔액: ${activeUser.balance}만원)`
+          사용자 정보: ${activeUser.name} (ID: ${activeUser.id}, 잔액: ${formatCurrency(activeUser.balance)})`
         }
       });
 
@@ -505,7 +519,7 @@ function AppContent() {
     const currentBalance = Number(activeUser.balance) || 0;
 
     if (amount > currentBalance) {
-      console.error(`잔액이 부족합니다. (현재 잔액: ${currentBalance}만원)`);
+      console.error(`잔액이 부족합니다. (현재 잔액: ${formatCurrency(currentBalance)})`);
       return;
     }
     
@@ -580,15 +594,29 @@ function AppContent() {
     if (!confirm("모든 거래 내역과 사용자 잔액을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) return;
 
     try {
-      const batch = writeBatch(db);
-      
       // 1. Delete all transactions
       const txSnapshot = await getDocs(collection(db, 'transactions'));
-      txSnapshot.docs.forEach(doc => batch.delete(doc.ref));
+      let batch = writeBatch(db);
+      let count = 0;
+      
+      for (const doc of txSnapshot.docs) {
+        batch.delete(doc.ref);
+        count++;
+        if (count % 400 === 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+        }
+      }
+      if (count % 400 !== 0) {
+        await batch.commit();
+      }
       
       // 2. Reset all users
       const userSnapshot = await getDocs(collection(db, 'users'));
-      userSnapshot.docs.forEach(doc => {
+      batch = writeBatch(db);
+      count = 0;
+      
+      for (const doc of userSnapshot.docs) {
         const resetUser = INITIAL_USERS.find(u => u.id === doc.id);
         if (resetUser) {
           batch.update(doc.ref, {
@@ -597,10 +625,24 @@ function AppContent() {
             unconfirmedValue: resetUser.unconfirmedValue,
             level: resetUser.level
           });
+        } else {
+          batch.update(doc.ref, {
+            balance: 100,
+            cumulativeValue: 0,
+            unconfirmedValue: 0,
+            level: 1
+          });
         }
-      });
+        count++;
+        if (count % 400 === 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+        }
+      }
+      if (count % 400 !== 0) {
+        await batch.commit();
+      }
       
-      await batch.commit();
       alert("모든 데이터가 초기화되었습니다.");
       window.location.reload();
     } catch (err) {
@@ -973,7 +1015,6 @@ function AppContent() {
       // If we have users but the current ID isn't one of them, it's likely an old/invalid ID
       console.warn(`Invalid currentUserId detected: ${currentUserId}. Resetting...`);
       setCurrentUserId(null);
-      localStorage.removeItem('currentUserId');
     }
   }, [isAuthReady, currentUserId, activeUser, users]);
 
@@ -999,14 +1040,7 @@ function AppContent() {
             {users.filter(u => u.id !== 'system').map(u => (
               <button
                 key={u.id}
-                onClick={() => {
-                  try {
-                    localStorage.setItem('currentUserId', u.id);
-                    window.location.reload();
-                  } catch (e) {
-                    console.error("Failed to save to localStorage", e);
-                  }
-                }}
+                onClick={() => setCurrentUserId(u.id)}
                 className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all group"
               >
                 <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center text-2xl shadow-sm border border-gray-100 group-hover:scale-110 transition-transform">
@@ -1137,7 +1171,7 @@ function AppContent() {
                 <div className="w-full space-y-3">
                   <div className="bg-indigo-50 p-3 rounded-2xl">
                     <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">지금까지 받은 금액</p>
-                    <p className="text-xl font-black text-indigo-600">{activeUser.cumulativeValue.toLocaleString()} 만원</p>
+                    <p className="text-xl font-black text-indigo-600">{formatCurrency(activeUser.cumulativeValue)}</p>
                     <p className="text-[9px] font-bold text-indigo-400 mt-1">받은 확정된 가치</p>
                   </div>
                   
@@ -1160,7 +1194,7 @@ function AppContent() {
               <div className="bg-pink-100/80 backdrop-blur-xl p-6 rounded-[2.5rem] text-pink-900 relative overflow-hidden shadow-xl shadow-pink-100/50 border border-pink-200/50 flex flex-col h-full min-h-[250px]">
                 <div className="relative z-10 flex-1 flex flex-col">
                   <p className="text-[9px] font-black uppercase tracking-widest opacity-80 mb-1.5">도착한 토큰</p>
-                  <p className="text-3xl font-black mb-1">{activeUser.unconfirmedValue.toLocaleString()} 만원</p>
+                  <p className="text-3xl font-black mb-1">{formatCurrency(activeUser.unconfirmedValue)}</p>
                   <p className="text-xs font-medium opacity-80 mb-5">아직 확정되지 않은 가치</p>
                   
                   <div className="space-y-2.5 mt-auto max-h-[180px] overflow-y-auto custom-scrollbar pr-2">
@@ -1192,7 +1226,7 @@ function AppContent() {
                             <span className="text-xs line-clamp-1 text-left leading-relaxed">"{tx.note}"</span>
                           </div>
                           <div className="relative z-10 flex items-center gap-2 shrink-0 mr-3">
-                            <span className="text-base font-black">{tx.amount}만원</span>
+                            <span className="text-base font-black">{formatCurrency(tx.amount)}</span>
                             <div className="w-6 h-6 bg-pink-100 text-pink-600 rounded-full flex items-center justify-center transition-opacity shadow-sm">
                               {isConfirming === tx.id ? (
                                 <Loader2 size={12} className="animate-spin" />
@@ -1383,7 +1417,7 @@ function AppContent() {
                           </div>
                           <div className="flex justify-between items-center">
                             <p className="text-[10px] text-gray-500 line-clamp-1 flex-1 pr-2">"{tx.note}"</p>
-                            <span className="text-xs font-black text-gray-900 whitespace-nowrap">{tx.amount}만원</span>
+                            <span className="text-xs font-black text-gray-900 whitespace-nowrap">{formatCurrency(tx.amount)}</span>
                           </div>
                         </div>
                       ))
@@ -1435,7 +1469,7 @@ function AppContent() {
                           </div>
                         </div>
                         <div className="flex justify-end pl-8">
-                          <p className="text-[10px] font-black text-indigo-600 bg-indigo-100/50 px-2 py-0.5 rounded-md">{user.score.toLocaleString()} 만원</p>
+                          <p className="text-[10px] font-black text-indigo-600 bg-indigo-100/50 px-2 py-0.5 rounded-md">{formatCurrency(user.score)}</p>
                         </div>
                       </div>
                     ))}
@@ -1498,7 +1532,7 @@ function AppContent() {
                     />
                     <span className="absolute right-6 top-1/2 -translate-y-1/2 font-black text-gray-300 text-xl">만원</span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-3 ml-1 font-medium">현재 보유 잔액: <span className="text-indigo-600 font-bold">{activeUser.balance.toLocaleString()} 만원</span></p>
+                  <p className="text-xs text-gray-400 mt-3 ml-1 font-medium">현재 보유 잔액: <span className="text-indigo-600 font-bold">{formatCurrency(activeUser.balance)}</span></p>
                 </div>
 
                 <div>
@@ -1601,8 +1635,8 @@ function AppContent() {
                 <div className="flex items-center gap-4 p-4 rounded-2xl bg-orange-50 border border-orange-100">
                   <div className="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center text-orange-600 font-black text-2xl">🌱</div>
                   <div>
-                    <h4 className="font-bold text-orange-900">Lv.1 비기너 (1만원~50만원)</h4>
-                    <p className="text-sm text-orange-700/80">가치토큰 놀이를 막 시작한 단계입니다.</p>
+                    <h4 className="font-bold text-orange-900">Lv.1 비기너 (0~50만원)</h4>
+                    <p className="text-sm text-orange-700/80">가치 창출의 첫 걸음을 내딛는 단계입니다.</p>
                   </div>
                 </div>
                 
@@ -1610,7 +1644,7 @@ function AppContent() {
                   <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600 font-black text-2xl">🌸</div>
                   <div>
                     <h4 className="font-bold text-green-900">Lv.2 챌린저 (50만원~100만원)</h4>
-                    <p className="text-sm text-green-700/80">적극적으로 가치를 나누기 시작한 단계입니다.</p>
+                    <p className="text-sm text-green-700/80">적극적으로 가치를 나누며 성장하는 단계입니다.</p>
                   </div>
                 </div>
                 
@@ -1618,15 +1652,55 @@ function AppContent() {
                   <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-black text-2xl">🌳</div>
                   <div>
                     <h4 className="font-bold text-blue-900">Lv.3 프로 (100만원~1000만원)</h4>
-                    <p className="text-sm text-blue-700/80">팀원들에게 큰 영향을 미치는 핵심 멤버입니다.</p>
+                    <p className="text-sm text-blue-700/80">안정적으로 가치를 인정받는 전문가입니다.</p>
                   </div>
                 </div>
                 
                 <div className="flex items-center gap-4 p-4 rounded-2xl bg-purple-50 border border-purple-100">
                   <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 font-black text-2xl">☀️</div>
                   <div>
-                    <h4 className="font-bold text-purple-900">Lv.4 마스터 (1000만원~1억)</h4>
+                    <h4 className="font-bold text-purple-900">Lv.4 마스터 (1000만원~2000만원)</h4>
                     <p className="text-sm text-purple-700/80">최고의 가치를 창출하는 마스터마인드입니다.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-2xl bg-teal-50 border border-teal-100">
+                  <div className="w-12 h-12 rounded-full bg-teal-100 flex items-center justify-center text-teal-600 font-black text-2xl">🌟</div>
+                  <div>
+                    <h4 className="font-bold text-teal-900">Lv.5 엑스퍼트 (2000만원~3000만원)</h4>
+                    <p className="text-sm text-teal-700/80">뛰어난 전문성으로 조직에 큰 기여를 하는 단계입니다.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-2xl bg-indigo-50 border border-indigo-100">
+                  <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-black text-2xl">🦸</div>
+                  <div>
+                    <h4 className="font-bold text-indigo-900">Lv.6 히어로 (3000만원~5000만원)</h4>
+                    <p className="text-sm text-indigo-700/80">모두가 인정하는 진정한 가치의 영웅입니다.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-2xl bg-red-50 border border-red-100">
+                  <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-black text-2xl">🏆</div>
+                  <div>
+                    <h4 className="font-bold text-red-900">Lv.7 챔피언 (5000만원~7000만원)</h4>
+                    <p className="text-sm text-red-700/80">압도적인 성과로 가치를 증명하는 챔피언입니다.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 font-black text-2xl">💎</div>
+                  <div>
+                    <h4 className="font-bold text-slate-900">Lv.8 그랜드마스터 (7000만원~1억)</h4>
+                    <p className="text-sm text-slate-700/80">가치 창출의 정점에 도달한 그랜드마스터입니다.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 p-4 rounded-2xl bg-yellow-50 border border-yellow-100">
+                  <div className="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center text-yellow-600 font-black text-2xl">👑</div>
+                  <div>
+                    <h4 className="font-bold text-yellow-900">Lv.9 레전드 (1억 이상)</h4>
+                    <p className="text-sm text-yellow-700/80">전설로 남을 최고의 가치를 지닌 레전드입니다.</p>
                   </div>
                 </div>
               </div>
@@ -1697,7 +1771,7 @@ function AppContent() {
                         </div>
                         <div className="flex-1">
                           <p className="font-bold text-gray-900">{user.name}</p>
-                          <p className="text-xs text-gray-500">총 {user.sent.toLocaleString()} 만원 기여</p>
+                          <p className="text-xs text-gray-500">총 {formatCurrency(user.sent)} 기여</p>
                         </div>
                       </div>
                     ))}
@@ -1726,7 +1800,7 @@ function AppContent() {
                         </div>
                         <div className="flex-1">
                           <p className="font-bold text-gray-900">{user.name}</p>
-                          <p className="text-xs text-gray-500">총 {user.received.toLocaleString()} 만원 받음</p>
+                          <p className="text-xs text-gray-500">총 {formatCurrency(user.received)} 받음</p>
                         </div>
                       </div>
                     ))}
